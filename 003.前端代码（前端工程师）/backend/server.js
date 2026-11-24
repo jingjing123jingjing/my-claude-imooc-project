@@ -4,31 +4,23 @@
  */
 
 const express = require('express');
-const mysql = require('mysql2/promise');
 const cors = require('cors');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
+const pool = require('./src/config/db');
+const authRoutes = require('./src/routes/authRoutes');
+const errorHandler = require('./src/middleware/errorHandler');
+const { JWT_SECRET } = require('./src/utils/jwt');
+
 const app = express();
-const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'finance-manager-secret-key-2026';
+const PORT = process.env.PORT || 3001;
 
 // 中间件
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// 数据库连接池
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || 'root',
-  database: process.env.DB_NAME || 'finance_manager',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-});
+// 数据库连接池由 src/config/db.js 统一创建（见文件顶部 require）
 
 // 测试数据库连接
 async function testConnection() {
@@ -65,159 +57,9 @@ app.get('/', (req, res) => {
 });
 
 // ==============================
-// 用户注册
+// 用户注册 / 登录（模块化实现）
 // ==============================
-app.post('/api/register', async (req, res) => {
-  try {
-    const { username, password, nickname } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: '用户名和密码不能为空'
-      });
-    }
-
-    const [existing] = await pool.execute(
-      'SELECT id FROM users WHERE username = ?',
-      [username]
-    );
-
-    if (existing.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: '用户名已存在'
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const [result] = await pool.execute(
-      'INSERT INTO users (username, password, nickname) VALUES (?, ?, ?)',
-      [username, hashedPassword, nickname || username]
-    );
-
-    const userId = result.insertId;
-
-    await pool.execute(
-      'INSERT INTO ledgers (user_id, name, description, is_default) VALUES (?, ?, ?, ?)',
-      [userId, '默认账本', '我的第一个账本', 1]
-    );
-
-    const [ledger] = await pool.execute(
-      'SELECT id FROM ledgers WHERE user_id = ? AND is_default = 1',
-      [userId]
-    );
-
-    const ledgerId = ledger[0].id;
-    const accountTypes = [
-      { name: '现金', icon: '💵', color: '#FFB7C5' },
-      { name: '微信支付', icon: '📱', color: '#7DD3C0' },
-      { name: '支付宝', icon: '🟢', color: '#FF8FA3' }
-    ];
-
-    for (const type of accountTypes) {
-      const [typeResult] = await pool.execute(
-        'SELECT id FROM account_types WHERE name = ?',
-        [type.name]
-      );
-      if (typeResult.length > 0) {
-        await pool.execute(
-          'INSERT INTO accounts (ledger_id, user_id, type_id, name, icon, color, initial_balance, current_balance) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [ledgerId, userId, typeResult[0].id, type.name, type.icon, type.color, 0, 0]
-        );
-      }
-    }
-
-    const token = jwt.sign(
-      { userId, username },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    res.status(201).json({
-      success: true,
-      message: '注册成功',
-      data: { userId, username, nickname: nickname || username, token }
-    });
-
-  } catch (error) {
-    console.error('注册错误:', error);
-    res.status(500).json({ success: false, message: '服务器错误' });
-  }
-});
-
-// ==============================
-// 用户登录
-// ==============================
-app.post('/api/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: '用户名和密码不能为空'
-      });
-    }
-
-    const [users] = await pool.execute(
-      'SELECT id, username, password, nickname, avatar_url, theme FROM users WHERE username = ?',
-      [username]
-    );
-
-    if (users.length === 0) {
-      return res.status(401).json({
-        success: false,
-        message: '用户名或密码错误'
-      });
-    }
-
-    const user = users[0];
-    const isValid = await bcrypt.compare(password, user.password);
-    if (!isValid) {
-      return res.status(401).json({
-        success: false,
-        message: '用户名或密码错误'
-      });
-    }
-
-    const [ledgers] = await pool.execute(
-      'SELECT id, name, description, is_default FROM ledgers WHERE user_id = ?',
-      [user.id]
-    );
-
-    const [accounts] = await pool.execute(
-      'SELECT id, name, icon, color, current_balance FROM accounts WHERE user_id = ?',
-      [user.id]
-    );
-
-    const token = jwt.sign(
-      { userId: user.id, username: user.username },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    res.json({
-      success: true,
-      message: '登录成功',
-      data: {
-        userId: user.id,
-        username: user.username,
-        nickname: user.nickname,
-        avatarUrl: user.avatar_url,
-        theme: user.theme,
-        token,
-        ledgers,
-        accounts
-      }
-    });
-
-  } catch (error) {
-    console.error('登录错误:', error);
-    res.status(500).json({ success: false, message: '服务器错误' });
-  }
-});
+app.use('/api', authRoutes);
 
 // ==============================
 // 验证Token
@@ -962,6 +804,9 @@ app.get('/api/category-types', async (req, res) => {
     res.status(500).json({ success: false, message: '服务器错误' });
   }
 });
+
+// 全局错误处理（必须放在所有路由之后）
+app.use(errorHandler);
 
 // 启动服务器
 app.listen(PORT, async () => {
