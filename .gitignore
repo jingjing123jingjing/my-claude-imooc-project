@@ -1,0 +1,22 @@
+# 环境变量与密钥（含数据库口令、JWT 密钥）
+.env
+.env.*
+!.env.example
+
+# 依赖目录
+node_modules/
+
+# 自动生成的测试报告
+**/tests/reports/
+
+# Claude Code 本机个人配置
+.claude/settings.local.json
+
+# 系统/编辑器临时文件
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+
+# 与解压目录内容重复的压缩包
+002.产品UI原型（美术设计）/stitch_prd_app_generator.zip
